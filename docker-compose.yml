@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: verix
+      POSTGRES_PASSWORD: verix_secret
+      POSTGRES_DB: verix_search
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verix -d verix_search"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      HOST: "0.0.0.0"
+      SUPABASE_DATABASE_URL: postgres://verix:verix_secret@postgres:5432/verix_search
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:?OPENCODE_API_KEY is required}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["node", "dist/src/workers/index.js"]
+    environment:
+      NODE_ENV: production
+      SUPABASE_DATABASE_URL: postgres://verix:verix_secret@postgres:5432/verix_search
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:?OPENCODE_API_KEY is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

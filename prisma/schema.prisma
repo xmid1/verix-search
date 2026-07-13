@@ -1,0 +1,283 @@
+// Verix Search — Prisma schema
+// PostgreSQL (Supabase) + pgvector for embeddings.
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity & Access
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  DEVELOPER
+  READ_ONLY
+  SEARCH_ONLY
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  role      Role      @default(DEVELOPER)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+  apiKeys   ApiKey[]
+}
+
+model Project {
+  id        String    @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  apiKeys   ApiKey[]
+  searches  Search[]
+
+  @@index([ownerId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  prefix     String    @unique // first 8 chars shown to the user, e.g. vx_live_ab12cd34
+  hash       String    // sha256 of the full secret, never store plaintext
+  name       String
+  role       Role      @default(SEARCH_ONLY)
+  scopes     String[]  @default([]) // search, research, extraction, streaming, crawler, admin
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  projectId  String?
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([projectId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Search / Research
+// ─────────────────────────────────────────────────────────────
+
+model Search {
+  id            String   @id @default(cuid())
+  query         String
+  intent        String?
+  language      String?
+  mode          String   @default("search") // search | research
+  providersUsed String[] @default([])
+  resultCount   Int      @default(0)
+  latencyMs     Int?
+  apiKeyId      String?
+  projectId     String?
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+  citations     Citation[]
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model ResearchSession {
+  id             String    @id @default(cuid())
+  question       String
+  plan           Json?
+  status         String    @default("planning")
+  confidence     Float?
+  summary        String?
+  contradictions Json?
+  sources        Json?
+  citationCount  Int?
+  latencyMs      Int?
+  apiKeyId       String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+  knowledgeNodes KnowledgeNode[]
+  citations      Citation[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ProviderHealth {
+  id             String    @id @default(cuid())
+  providerId     String    @unique
+  displayName    String
+  category       String
+  healthy        Boolean   @default(true)
+  lastCheckedAt  DateTime?
+  avgLatencyMs   Int?
+  successRate    Float?    @default(1.0)
+  totalCalls     Int       @default(0)
+  totalFailures  Int       @default(0)
+  updatedAt      DateTime  @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// Knowledge (documents, chunks, citations, graph, cache)
+// ─────────────────────────────────────────────────────────────
+
+model Document {
+  id             String    @id @default(cuid())
+  url            String    @unique
+  title          String?
+  provider       String?
+  contentHash    String?
+  markdown       String?
+  codeBlocks     Json?
+  trustScore     Float     @default(50)
+  freshnessScore Float     @default(50)
+  spamScore      Float     @default(0)
+  publishedAt    DateTime?
+  fetchedAt      DateTime  @default(now())
+  metadata       Json?
+  chunks         Chunk[]
+  citations      Citation[]
+
+  @@index([provider])
+}
+
+model Chunk {
+  id         String                 @id @default(cuid())
+  documentId String
+  document   Document               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String
+  position   Int      @default(0)
+  tokenCount Int?
+  embedding  Unsupported("vector(384)")?
+  createdAt  DateTime @default(now())
+
+  @@index([documentId])
+}
+
+model Citation {
+  id                String           @id @default(cuid())
+  searchId          String?
+  search            Search?          @relation(fields: [searchId], references: [id], onDelete: Cascade)
+  researchSessionId String?
+  researchSession   ResearchSession? @relation(fields: [researchSessionId], references: [id], onDelete: Cascade)
+  documentId        String?
+  document          Document?        @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  url               String
+  title             String?
+  author            String?
+  publishedAt       DateTime?
+  trustScore        Float?
+  snippet           String?
+  createdAt         DateTime         @default(now())
+
+  @@index([searchId])
+  @@index([researchSessionId])
+}
+
+model KnowledgeNode {
+  id        String           @id @default(cuid())
+  sessionId String?
+  session   ResearchSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  label     String
+  type      String   @default("concept")
+  metadata  Json?
+  fromEdges KnowledgeEdge[] @relation("fromNode")
+  toEdges   KnowledgeEdge[] @relation("toNode")
+
+  @@index([sessionId])
+}
+
+model KnowledgeEdge {
+  id       String        @id @default(cuid())
+  sourceId String
+  source   KnowledgeNode @relation("fromNode", fields: [sourceId], references: [id], onDelete: Cascade)
+  targetId String
+  target   KnowledgeNode @relation("toNode", fields: [targetId], references: [id], onDelete: Cascade)
+  relation String
+
+  @@index([sourceId])
+  @@index([targetId])
+}
+
+model SemanticCacheEntry {
+  id          String   @id @default(cuid())
+  queryHash   String   @unique
+  queryText   String
+  embedding   Unsupported("vector(384)")?
+  resultJson  Json
+  hitCount    Int      @default(0)
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+}
+
+model DomainAffinity {
+  id         String @id @default(cuid())
+  technology String
+  domain     String
+  weight     Float  @default(1.0)
+
+  @@unique([technology, domain])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Credibility & Memory
+// ─────────────────────────────────────────────────────────────
+
+model SourceCredibility {
+  domain      String
+  provider    String
+  score       Int      @default(50)
+  signals     Int      @default(0)
+  lastUpdated DateTime @default(now())
+
+  @@id([domain, provider])
+}
+
+model SourceMemory {
+  domain      String
+  provider    String
+  topicTags   String[]
+  avgScore    Float    @default(50)
+  timesUsed   Int      @default(0)
+  lastQueried DateTime?
+
+  @@id([domain, provider])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Jobs & Audit
+// ─────────────────────────────────────────────────────────────
+
+model JobRecord {
+  id        String    @id @default(cuid())
+  queue     String
+  type      String
+  status    String    @default("waiting") // waiting | active | completed | failed
+  payload   Json?
+  result    Json?
+  error     String?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([queue, status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  apiKeyId  String?
+  action    String
+  resource  String?
+  ip        String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([apiKeyId])
+  @@index([createdAt])
+}

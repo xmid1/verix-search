@@ -1,0 +1,38 @@
+app = "verix-search"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  health_check = { path = "/v1/health", interval = "30s", timeout = "5s", initial_delay = "15s" }
+
+[[services]]
+  port = 443
+  protocol = "tls"
+  [services.concurrency]
+    hard_limit = 50
+    soft_limit = 25
+
+[env]
+  NODE_ENV = "production"
+  HOST = "0.0.0.0"
+  PORT = "5000"
+  LOG_LEVEL = "info"
+  API_VERSION = "v1"
+  RATE_LIMIT_MAX = "120"
+  RATE_LIMIT_WINDOW = "1 minute"
+  EMBEDDING_PROVIDER = "local"
+  LLM_BASE_URL = "https://opencode.ai/zen/v1"
+  LLM_MODEL = "deepseek-v4-flash-free"
+
+[secrets]
+  SUPABASE_DATABASE_URL = ""
+  REDIS_URL = ""
+  OPENCODE_API_KEY = ""
+  JWT_SECRET = ""

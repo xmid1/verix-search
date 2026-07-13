@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+.DS_Store
+.git
+.github
+reports
+tests
+scripts
+session-*.md
+docs/advanced-features-spec.md
+docs/strategic-roadmap.md
+coverage
+.cache
